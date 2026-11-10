@@ -62,7 +62,6 @@ export function DictionaryLoader({ onLoaded }: DictionaryLoaderProps) {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".txt,.dic,.wordlist"
           onChange={handleFileUpload}
           className="hidden"
         />
