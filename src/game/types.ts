@@ -21,6 +21,8 @@ export interface RackTile {
 
 export type Direction = 'H' | 'V';
 
+export type RackMode = 'random' | 'manual';
+
 export interface Move {
   row: number;
   col: number;

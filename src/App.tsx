@@ -5,6 +5,9 @@ import { Rack } from '@/components/Rack';
 import { ScorePanel } from '@/components/ScorePanel';
 import { DictionaryLoader } from '@/components/DictionaryLoader';
 import { BlankPicker } from '@/components/BlankPicker';
+import { RackModeSelect } from '@/components/RackModeSelect';
+import { RackBuilder } from '@/components/RackBuilder';
+import { BagCounter } from '@/components/BagCounter';
 import { RevealPanel } from '@/components/RevealPanel';
 import { TopMovesPanel } from '@/components/TopMovesPanel';
 import { dictionary } from '@/game/dictionary';
@@ -18,8 +21,8 @@ import {
   previewScore,
 } from '@/game/engine';
 import { findBestMove, findTopMoves } from '@/game/solver';
-import { buildTileBag, shuffle, LETTER_VALUES, drawRackWithRule, refillRackWithRule, rackMeetsVowelConsonantRule, canEverSatisfyRule, MULTI_LETTER_TILES } from '@/game/tiles';
-import { Board, Cell, PlacedTile, RackTile, Move, RoundResult } from '@/game/types';
+import { buildTileBag, shuffle, LETTER_VALUES, drawRackWithRule, refillRackWithRule, rackMeetsVowelConsonantRule, canEverSatisfyRule, MULTI_LETTER_TILES, takeLettersFromBag } from '@/game/tiles';
+import { Board, Cell, PlacedTile, RackTile, Move, RoundResult, RackMode } from '@/game/types';
 import { Play, RotateCcw, ArrowRightLeft, Flag, Trophy, Eye, Crown, Clock, Infinity as InfinityIcon, Calculator, ShieldCheck, ShieldOff, ArrowLeft } from 'lucide-react';
 import { useTileDrag } from '@/hooks/useTileDrag';
 
@@ -29,6 +32,8 @@ export default function App() {
   const [dictLoaded, setDictLoaded] = useState(false);
   const [gameMode, setGameMode] = useState<'timed' | 'untimed' | null>(null);
   const [validationMode, setValidationMode] = useState<boolean | null>(null);
+  const [rackMode, setRackMode] = useState<RackMode | null>(null);
+  const [pendingRackFill, setPendingRackFill] = useState(0);
   const [timeLeft, setTimeLeft] = useState(180);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [committedBoard, setCommittedBoard] = useState<Board>(createEmptyBoard);
@@ -113,21 +118,27 @@ export default function App() {
   const tilesLeft = bag.length;
   const currentRound = rounds.length + 1;
 
-  // Start a new game. Accepts an optional mode override so the timer
-  // starts immediately when selecting a mode (before gameMode state updates).
-  const startNewGame = useCallback((modeOverride?: 'timed' | 'untimed' | null) => {
+  const startNewGame = useCallback((choice: RackMode) => {
     stopTimer();
-    const effectiveMode = modeOverride !== undefined ? modeOverride : gameMode;
     const newBag = shuffle(buildTileBag());
-    const { rackLetters: initialRack, remaining: remainingBag } = drawRackWithRule(newBag, RACK_SIZE);
-
-    setBag(remainingBag);
-    setRack(initialRack.map((letter, i) => ({
-      id: `tile-0-${i}`,
-      letter,
-      isBlank: letter === '?',
-      used: false,
-    })));
+    setRackMode(choice);
+    if (choice === 'manual') {
+      setBag(newBag);
+      setRack([]);
+      setPendingRackFill(RACK_SIZE);
+      setTimeLeft(TURN_SECONDS);
+    } else {
+      const { rackLetters: initialRack, remaining: remainingBag } = drawRackWithRule(newBag, RACK_SIZE);
+      setBag(remainingBag);
+      setRack(initialRack.map((letter, i) => ({
+        id: `tile-0-${i}`,
+        letter,
+        isBlank: letter === '?',
+        used: false,
+      })));
+      setPendingRackFill(0);
+      startTimer();
+    }
     setCommittedBoard(createEmptyBoard());
     setPendingBoard(createEmptyBoard());
     setRounds([]);
@@ -146,14 +157,25 @@ export default function App() {
     setLastMoveCells(new Set());
     setTypingMode(null);
     lastPlacementRef.current = null;
-    startTimer(effectiveMode);
-  }, [startTimer, stopTimer, gameMode]);
+  }, [startTimer, stopTimer]);
 
-  // Auto-start game when dictionary loads
   const handleDictLoaded = useCallback(() => {
     setDictLoaded(true);
-    startNewGame();
-  }, [startNewGame]);
+  }, []);
+
+  // Commit the fill tiles the player chose for this round and start the turn timer
+  const confirmRackBuild = useCallback((letters: string[]) => {
+    const newTiles: RackTile[] = letters.map((letter, i) => ({
+      id: `tile-${rounds.length + 1}-${i}-${Math.random().toString(36).slice(2, 8)}`,
+      letter,
+      isBlank: letter === '?',
+      used: false,
+    }));
+    setBag(takeLettersFromBag(bag, letters));
+    setRack([...rack, ...newTiles]);
+    setPendingRackFill(0);
+    startTimer();
+  }, [bag, rack, rounds.length, startTimer]);
 
   // Get pending tiles (placed but not committed)
   const pendingTiles = useMemo(() => {
@@ -410,7 +432,7 @@ export default function App() {
 
   // Auto-pass when timer hits 0
   useEffect(() => {
-    if (gameMode === 'timed' && timeLeft === 0 && !revealData && !gameOver && !showPassConfirm) {
+    if (gameMode === 'timed' && timeLeft === 0 && !revealData && !gameOver && !showPassConfirm && pendingRackFill === 0) {
       clearPending();
       const rackForSolver = rack.map(t => ({ letter: t.letter, isBlank: t.isBlank }));
       const bestMove = findBestMove(committedBoard, rackForSolver);
@@ -431,7 +453,7 @@ export default function App() {
       }
       setError('Tiempo agotado. Turno pasado automáticamente.');
     }
-  }, [timeLeft, gameMode, revealData, gameOver, showPassConfirm, rack, committedBoard, clearPending]);
+  }, [timeLeft, gameMode, revealData, gameOver, showPassConfirm, rack, committedBoard, clearPending, pendingRackFill]);
 
   // Shuffle rack
   const shuffleRack = useCallback(() => {
@@ -944,28 +966,39 @@ export default function App() {
       .map((t, i) => (consumedRackIndices.has(i) ? null : t.letter))
       .filter((l): l is string => l !== null);
 
-    const { rackLetters: newRackLetters, remaining: remainingBag } = refillRackWithRule(keptLetters, newBag, RACK_SIZE);
-    newBag = remainingBag;
-
-    const newRack = newRackLetters.map((letter, i) => ({
-      id: `tile-${rounds.length + 1}-${i}-${Math.random().toString(36).slice(2, 8)}`,
-      letter,
-      isBlank: letter === '?',
-      used: false,
-    }));
+    let newRack: RackTile[];
+    if (rackMode === 'manual') {
+      newRack = rack
+        .filter((_, i) => !consumedRackIndices.has(i))
+        .map(t => ({ ...t, used: false }));
+    } else {
+      const { rackLetters: newRackLetters, remaining: remainingBag } = refillRackWithRule(keptLetters, newBag, RACK_SIZE);
+      newBag = remainingBag;
+      newRack = newRackLetters.map((letter, i) => ({
+        id: `tile-${rounds.length + 1}-${i}-${Math.random().toString(36).slice(2, 8)}`,
+        letter,
+        isBlank: letter === '?',
+        used: false,
+      }));
+    }
 
     // Game over when the rack can no longer satisfy the 2-vowel / 2-consonant rule
     // given the remaining bag (even if some tiles remain).
-    if (!canEverSatisfyRule(newRackLetters, newBag)) {
-      setGameOver(true);
-      stopTimer();
-    }
+    const isGameOver = !canEverSatisfyRule(newRack.map(t => t.letter), newBag);
+    const manualFill = rackMode === 'manual' && !isGameOver
+      ? Math.min(RACK_SIZE - newRack.length, newBag.length)
+      : 0;
 
     setRounds(prev => [...prev, roundResult]);
     setCommittedBoard(newBoard);
     setPendingBoard(cloneBoard(newBoard));
     setBag(newBag);
     setRack(newRack);
+    setPendingRackFill(manualFill);
+    if (isGameOver) {
+      setGameOver(true);
+      stopTimer();
+    }
     setRevealData(null);
     setBestMoveOverlay(null);
     setShowBestMovePreview(false);
@@ -973,8 +1006,8 @@ export default function App() {
     lastPlacementRef.current = null;
     setSelectedRackTile(null);
     setError('');
-    startTimer();
-  }, [revealData, committedBoard, rack, bag, rounds.length, startTimer]);
+    if (!isGameOver && manualFill === 0) startTimer();
+  }, [revealData, committedBoard, rack, bag, rounds.length, rackMode, startTimer, stopTimer]);
 
   useEffect(() => {
     continueAfterRevealRef.current = continueAfterReveal;
@@ -1019,6 +1052,8 @@ export default function App() {
     setTimeLeft(TURN_SECONDS);
     setGameMode(null);
     setValidationMode(null);
+    setRackMode(null);
+    setPendingRackFill(0);
     setGameOver(false);
     setShowGameOverModal(true);
     setRevealData(null);
@@ -1063,7 +1098,7 @@ export default function App() {
 
           <div className="space-y-4">
             <button
-              onClick={() => { setValidationMode(true); startNewGame(); }}
+              onClick={() => setValidationMode(true)}
               className="w-full flex items-start gap-4 p-5 rounded-xl border-2 border-gray-200 hover:border-emerald-400 hover:bg-emerald-50 transition-all text-left group"
             >
               <div className="w-12 h-12 shrink-0 rounded-xl bg-emerald-100 group-hover:bg-emerald-200 flex items-center justify-center transition-colors">
@@ -1076,7 +1111,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => { setValidationMode(false); startNewGame(); }}
+              onClick={() => setValidationMode(false)}
               className="w-full flex items-start gap-4 p-5 rounded-xl border-2 border-gray-200 hover:border-amber-400 hover:bg-amber-50 transition-all text-left group"
             >
               <div className="w-12 h-12 shrink-0 rounded-xl bg-amber-100 group-hover:bg-amber-200 flex items-center justify-center transition-colors">
@@ -1090,6 +1125,16 @@ export default function App() {
           </div>
         </div>
       </div>
+    );
+  }
+
+  // Rack mode selection screen (after validation choice, before game starts)
+  if (dictLoaded && gameMode !== null && validationMode !== null && rackMode === null) {
+    return (
+      <RackModeSelect
+        onSelect={startNewGame}
+        onBack={() => setValidationMode(null)}
+      />
     );
   }
 
@@ -1110,7 +1155,7 @@ export default function App() {
 
           <div className="space-y-4">
             <button
-              onClick={() => { setGameMode('untimed'); startNewGame('untimed'); }}
+              onClick={() => setGameMode('untimed')}
               className="w-full flex items-start gap-4 p-5 rounded-xl border-2 border-gray-200 hover:border-amber-400 hover:bg-amber-50 transition-all text-left group"
             >
               <div className="w-12 h-12 shrink-0 rounded-xl bg-amber-100 group-hover:bg-amber-200 flex items-center justify-center transition-colors">
@@ -1123,7 +1168,7 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => { setGameMode('timed'); startNewGame('timed'); }}
+              onClick={() => setGameMode('timed')}
               className="w-full flex items-start gap-4 p-5 rounded-xl border-2 border-gray-200 hover:border-sky-400 hover:bg-sky-50 transition-all text-left group"
             >
               <div className="w-12 h-12 shrink-0 rounded-xl bg-sky-100 group-hover:bg-sky-200 flex items-center justify-center transition-colors">
@@ -1307,8 +1352,24 @@ export default function App() {
             currentRound={currentRound}
             tilesLeft={tilesLeft}
           />
+          {rackMode === 'manual' && (
+            <div className="mt-4">
+              <BagCounter bag={bag} />
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Rack builder (manual mode) */}
+      {pendingRackFill > 0 && (
+        <RackBuilder
+          round={currentRound}
+          bag={bag}
+          keptLetters={rack.map(t => t.letter)}
+          slots={pendingRackFill}
+          onConfirm={confirmRackBuild}
+        />
+      )}
 
       {/* Blank picker modal */}
       {blankPickerOpen && (

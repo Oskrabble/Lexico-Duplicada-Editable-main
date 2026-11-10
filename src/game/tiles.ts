@@ -203,6 +203,30 @@ export function buildTileBag(): string[] {
   return bag;
 }
 
+// Letters in alphabetical order (Spanish), with the blank last
+export const LETTERS_ALPHABETICAL: string[] = SPANISH_TILES.map(t => t.letter).sort((a, b) => {
+  if (a === '?') return 1;
+  if (b === '?') return -1;
+  return a.localeCompare(b, 'es');
+});
+
+export function countLetters(letters: string[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const letter of letters) {
+    counts[letter] = (counts[letter] ?? 0) + 1;
+  }
+  return counts;
+}
+
+// Remove one tile per letter from the bag. Callers must ensure the bag holds every letter.
+export function takeLettersFromBag(bag: string[], letters: string[]): string[] {
+  const remaining = [...bag];
+  for (const letter of letters) {
+    remaining.splice(remaining.indexOf(letter), 1);
+  }
+  return remaining;
+}
+
 // Shuffle helper
 export function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
