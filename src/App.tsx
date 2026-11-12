@@ -23,7 +23,7 @@ import {
 import { findBestMove, findTopMoves } from '@/game/solver';
 import { buildTileBag, shuffle, LETTER_VALUES, drawRackWithRule, refillRackWithRule, rackMeetsVowelConsonantRule, canEverSatisfyRule, MULTI_LETTER_TILES, takeLettersFromBag } from '@/game/tiles';
 import { Board, Cell, PlacedTile, RackTile, Move, RoundResult, RackMode } from '@/game/types';
-import { Play, RotateCcw, ArrowRightLeft, Flag, Trophy, Eye, Crown, Clock, Infinity as InfinityIcon, Calculator, ShieldCheck, ShieldOff, ArrowLeft } from 'lucide-react';
+import { Play, RotateCcw, ArrowRightLeft, Flag, Trophy, Eye, Crown, Clock, Infinity as InfinityIcon, Calculator, ShieldCheck, ShieldOff, ArrowLeft, Award, Target } from 'lucide-react';
 import { useTileDrag } from '@/hooks/useTileDrag';
 
 const RACK_SIZE = 7;
@@ -63,6 +63,7 @@ export default function App() {
   const [showGameOverModal, setShowGameOverModal] = useState(true);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [showNewGameConfirm, setShowNewGameConfirm] = useState(false);
+  const [showCommitChoice, setShowCommitChoice] = useState(false);
   const [topMoveOverlay, setTopMoveOverlay] = useState<Map<string, PlacedTile> | null>(null);
   const [gameOver, setGameOver] = useState(false);
   const [error, setError] = useState('');
@@ -721,7 +722,7 @@ export default function App() {
   // Enter key continues after reveal modal (desktop only)
   useEffect(() => {
     if (!isDesktop()) return;
-    if (!revealData) return;
+    if (!revealData || showCommitChoice) return;
     const handleRevealKey = (e: KeyboardEvent) => {
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -730,7 +731,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleRevealKey);
     return () => window.removeEventListener('keydown', handleRevealKey);
-  }, [revealData]);
+  }, [revealData, showCommitChoice]);
 
   // Swap tiles
   const swapTiles = useCallback(() => {
@@ -903,7 +904,7 @@ export default function App() {
   }, []);
 
   // Continue after reveal - commit the MASTER's (best) move and draw new tiles
-  const continueAfterReveal = useCallback(() => {
+  const continueAfterReveal = useCallback((commitSource: 'master' | 'player' = 'master') => {
     if (!revealData) return;
 
     let newBoard = committedBoard;
@@ -918,8 +919,10 @@ export default function App() {
       invalidWords: revealData.invalidWords,
     };
 
-    // In duplicate Scrabble, the master's (best) move is always committed to the board
-    const moveToCommit = revealData.bestMove;
+    // In manual mode the player may choose to keep their own move instead of the master's
+    const moveToCommit = commitSource === 'player' && revealData.playerMove
+      ? revealData.playerMove
+      : revealData.bestMove;
     if (moveToCommit) {
       newBoard = applyMoveToBoard(committedBoard, moveToCommit);
 
@@ -938,8 +941,8 @@ export default function App() {
       setLastMoveCells(moveCells);
     }
 
-    // Determine how many tiles the master's move consumed
-    const masterTileCount = moveToCommit?.tiles.length ?? 0;
+    // Determine how many tiles the committed move consumed
+    const committedTileCount = moveToCommit?.tiles.length ?? 0;
 
     // Match the master's tiles to rack tiles and mark them as consumed
     // We match by letter (or blank). For blanks, match isBlank tiles.
@@ -1009,9 +1012,18 @@ export default function App() {
     if (!isGameOver && manualFill === 0) startTimer();
   }, [revealData, committedBoard, rack, bag, rounds.length, rackMode, startTimer, stopTimer]);
 
+  const handleRevealContinue = useCallback(() => {
+    if (!revealData) return;
+    if (rackMode === 'manual' && revealData.playerAction === 'play' && revealData.playerMove && revealData.bestMove) {
+      setShowCommitChoice(true);
+    } else {
+      continueAfterReveal('master');
+    }
+  }, [revealData, rackMode, continueAfterReveal]);
+
   useEffect(() => {
-    continueAfterRevealRef.current = continueAfterReveal;
-  }, [continueAfterReveal]);
+    continueAfterRevealRef.current = handleRevealContinue;
+  }, [handleRevealContinue]);
 
   // Show best move preview (peek) — toggle on/off, empty colored cells only
   const peekBestMove = useCallback(() => {
@@ -1064,6 +1076,7 @@ export default function App() {
     setTopMovesSelected(null);
     setShowTopConfirm(false);
     setShowBestMovePreview(false);
+    setShowCommitChoice(false);
     setTypingMode(null);
     setError('');
   }, [stopTimer]);
@@ -1486,15 +1499,51 @@ export default function App() {
       )}
 
       {/* Reveal panel */}
-      {revealData && (
+      {revealData && !showCommitChoice && (
         <RevealPanel
           playerMove={revealData.playerMove}
           bestMove={revealData.bestMove}
           playerAction={revealData.playerAction}
           invalidWords={revealData.invalidWords}
-          onContinue={continueAfterReveal}
+          onContinue={handleRevealContinue}
           isLastRound={false}
         />
+      )}
+
+      {/* Commit choice modal (manual mode only) */}
+      {showCommitChoice && revealData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full">
+            <h2 className="text-xl font-bold text-gray-800 mb-2 text-center">¿Qué jugada conservar?</h2>
+            <p className="text-sm text-gray-500 mb-6 text-center">Elige qué palabra queda en el tablero</p>
+            <div className="space-y-3">
+              <button
+                onClick={() => { setShowCommitChoice(false); continueAfterReveal('master'); }}
+                className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-violet-400 hover:bg-violet-50 transition-all text-left group"
+              >
+                <div className="w-10 h-10 shrink-0 rounded-xl bg-violet-100 group-hover:bg-violet-200 flex items-center justify-center transition-colors">
+                  <Award size={20} className="text-violet-600" />
+                </div>
+                <div className="flex-1">
+                  <p className="font-bold text-gray-800">Mejor jugada</p>
+                  <p className="text-sm text-gray-500">{revealData.bestMove?.word} · {revealData.bestMove?.score} pts</p>
+                </div>
+              </button>
+              <button
+                onClick={() => { setShowCommitChoice(false); continueAfterReveal('player'); }}
+                className="w-full flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-all text-left group"
+              >
+                <div className="w-10 h-10 shrink-0 rounded-xl bg-blue-100 group-hover:bg-blue-200 flex items-center justify-center transition-colors">
+                  <Target size={20} className="text-blue-600" />
+                </div>
+                <div className="flex-1">
+                  <p className="font-bold text-gray-800">Mi jugada</p>
+                  <p className="text-sm text-gray-500">{revealData.playerMove?.word} · {revealData.playerMove?.score} pts</p>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Game over modal */}
